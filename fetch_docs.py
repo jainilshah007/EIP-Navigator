@@ -3,8 +3,7 @@ import os
 import re
 
 def fetch_all_eips():
-
-    api_url = "https://api.github.com/repos/ethereum/ERCs/contents/ERCS"
+    api_url = "https://api.github.com/repos/ethereum/EIPs/contents/EIPS"
     data_dir = "./data"
     os.makedirs(data_dir, exist_ok=True)
     

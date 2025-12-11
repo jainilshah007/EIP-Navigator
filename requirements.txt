@@ -9,3 +9,4 @@ langchain-text-splitters
 rank_bm25
 rank_bm25
 PyYAML
+cross-encoder

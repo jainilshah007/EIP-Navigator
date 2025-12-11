@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import pickle
 import json
 import re
+from sentence_transformers import CrossEncoder
 
 load_dotenv()
 
@@ -19,6 +20,9 @@ class LibrarianAgent:
             name="eip_data",
             embedding_function=self.ef
         )
+        # cross-encoder for re-ranking
+        self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
         # load bm25 index
         try:
             with open("bm25_index.pkl", "rb") as f:
@@ -29,18 +33,19 @@ class LibrarianAgent:
         except FileNotFoundError:
             print("Warning: bm25_index.pkl not found. Run ingest.py first.")
             self.bm25 = None
+            self.bm25_map = []
             self.graph = {}
 
-    def retrieve(self, query: str, n_results: int = 5):
+    def retrieve(self, query: str, n_results: int = 5, status_filter: str = None):
         unique_docs = {}
         
-        # if query has explicit ERC number, inject matching docs directly
+        # if query has explicit EIP number, inject matching docs directly
         eip_matches = re.findall(r'(?:eip|erc)[-\s]?(\d+)', query.lower())
         if eip_matches and self.bm25_map:
             for num in eip_matches:
                 for doc_item in self.bm25_map:
                     source = doc_item['metadata'].get('source', '').lower()
-                    if source == f"erc-{num}.md" or source == f"eip-{num}.md":
+                    if source.endswith(f"erc-{num}.md") or source.endswith(f"eip-{num}.md"):
                         doc_id = doc_item['id']
                         if doc_id not in unique_docs:
                             unique_docs[doc_id] = {
@@ -49,11 +54,13 @@ class LibrarianAgent:
                                 "score": 10.0
                             }
         
-        # vector search
+        # vector search with optional metadata filter
         try:
+            where_filter = {"status": status_filter} if status_filter else None
             vector_results = self.collection.query(
                 query_texts=[query],
-                n_results=n_results * 2
+                n_results=n_results * 3,
+                where=where_filter
             )
             
             if vector_results['documents']:
@@ -69,13 +76,18 @@ class LibrarianAgent:
 
         # bm25 keyword search
         if self.bm25:
-            tokenized_query = query.lower().split(" ")
+            tokenized_query = re.findall(r'\w+', query.lower())
             bm25_scores = self.bm25.get_scores(tokenized_query)
-            top_n = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:n_results * 2]
+            top_n = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:n_results * 3]
             
             for rank, idx in enumerate(top_n):
                 doc_item = self.bm25_map[idx]
                 doc_id = doc_item['id']
+                
+                # apply status filter for bm25 too
+                if status_filter and doc_item['metadata'].get('status') != status_filter:
+                    continue
+                    
                 rrf_score = 1.0 / (rank + 1)
                 
                 if doc_id in unique_docs:
@@ -87,24 +99,27 @@ class LibrarianAgent:
                         "score": rrf_score
                     }
 
-        # boost exact matches
-        eip_matches = re.findall(r'(?:eip|erc)[-\s]?(\d+)', query.lower())
-        if eip_matches:
-            for doc_id, doc_data in unique_docs.items():
-                source = doc_data['metadata'].get('source', '').lower()
-                title = doc_data['metadata'].get('title', '').lower()
+        # initial sort
+        candidates = sorted(unique_docs.values(), key=lambda x: x['score'], reverse=True)[:n_results * 2]
+        
+        # cross-encoder re-ranking
+        if candidates:
+            pairs = [(query, doc['content'][:500]) for doc in candidates]
+            rerank_scores = self.reranker.predict(pairs)
+            for i, doc in enumerate(candidates):
+                doc['rerank_score'] = float(rerank_scores[i])
                 
+                # boost explicit EIP matches after reranking
+                source = doc['metadata'].get('source', '').lower()
                 for num in eip_matches:
-                    if f"erc-{num}.md" == source or f"eip-{num}.md" == source:
-                        doc_data['score'] *= 5.0
+                    if source.endswith(f"eip-{num}.md") or source.endswith(f"erc-{num}.md"):
+                        doc['rerank_score'] += 5.0
                         break
-
-                    elif f"erc {num}" in title or f"eip {num}" in title:
-                        doc_data['score'] *= 2.0
-                        break
-
-        # sort and limit
-        sorted_docs = sorted(unique_docs.values(), key=lambda x: x['score'], reverse=True)[:n_results]
+                        
+            candidates.sort(key=lambda x: x['rerank_score'], reverse=True)
+        
+        # final top-N
+        sorted_docs = candidates[:n_results]
         
         # add dependency context
         expanded_context = []
@@ -127,11 +142,12 @@ class SecurityAuditorAgent:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    def audit(self, code: str):
+    def audit(self, content: str):
         system_prompt = (
-            "You are a Senior Smart Contract Auditor. Analyze the provided Solidity code for security vulnerabilities "
-            "(re-entrancy, overflow, access control, logic errors). "
-            "Return JSON format: {'status': 'PASS' or 'FAIL', 'feedback': 'string explaining issues'}."
+            "You are a quality reviewer. If the response contains Solidity code, check for security issues "
+            "(re-entrancy, overflow, access control). If it's an explanation, check for accuracy. "
+            "Return JSON: {'status': 'PASS' or 'FAIL', 'feedback': 'explanation'}. "
+            "If there's no code and the explanation looks reasonable, return PASS."
         )
         
         try:
@@ -139,7 +155,7 @@ class SecurityAuditorAgent:
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": code}
+                    {"role": "user", "content": content}
                 ],
                 response_format={"type": "json_object"}
             )
@@ -158,9 +174,10 @@ class InterfaceEngineerAgent:
         context_str = "\n\n---\n\n".join([doc['content'] for doc in context_list])
         
         system_prompt = (
-            "You are a Senior Solidity Security Engineer. "
-            "Based ONLY on the context, provide a secure Solidity Interface/Contract. "
-            "Respond with ONLY the code block if possible, or very minimal explanation."
+            "You are an Ethereum expert. Answer the user's query based on the provided context. "
+            "If they ask for code, provide secure Solidity code. "
+            "If they ask for an explanation or information, provide a clear answer. "
+            "Always cite which EIPs you're referencing."
         )
         
         user_prompt = f"Query: {query}\n\nContext:\n{context_str}"

@@ -17,10 +17,23 @@ def extract_frontmatter(text):
             return {}
     return {}
 
+def split_by_sections(text):
+    """Split markdown by headers, keeping each section together"""
+    sections = re.split(r'\n(?=## )', text)
+    chunks = []
+    for section in sections:
+        if len(section.strip()) > 100:
+            if len(section) > 2000:
+                # fallback: split large sections
+                for i in range(0, len(section), 1500):
+                    chunks.append(section[i:i+1500])
+            else:
+                chunks.append(section.strip())
+    return chunks if chunks else [text[:1500]]
+
 def ingest_data():
     chroma_client = chromadb.PersistentClient(path="./chroma_db")
     
-
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="BAAI/bge-small-en-v1.5"
     )
@@ -28,12 +41,6 @@ def ingest_data():
     collection = chroma_client.get_or_create_collection(
         name="eip_data",
         embedding_function=ef
-    )
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500,
-        chunk_overlap=200,
-        length_function=len,
     )
     
     data_dir = "./data"
@@ -57,7 +64,6 @@ def ingest_data():
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
             
-
             frontmatter = extract_frontmatter(text)
             title = frontmatter.get('title', 'Unknown Title')
             status = frontmatter.get('status', 'Unknown')
@@ -68,22 +74,26 @@ def ingest_data():
                 eip_num = eip_num_match.group(1)
                 eip_dependency_graph[eip_num] = requires
 
-            chunks = text_splitter.split_text(text)
+            chunks = split_by_sections(text)
             for i, chunk in enumerate(chunks):
                 documents.append(chunk)
                 ids.append(f"{filename}-{i}")
+                
+                # extract section name from chunk
+                section_match = re.match(r'^## (.+)', chunk)
+                section_name = section_match.group(1) if section_match else "Header"
                 
                 meta = {
                     "source": filename, 
                     "chunk_index": i,
                     "title": title,
+                    "section": section_name,
                     "status": status,
                     "requires": requires
                 }
                 metadatas.append(meta)
-                
 
-                bm25_corpus.append(chunk.split(" "))
+                bm25_corpus.append(re.findall(r'\w+', chunk.lower()))
                 bm25_doc_map.append({"id": f"{filename}-{i}", "content": chunk, "metadata": meta})
 
     if documents:
