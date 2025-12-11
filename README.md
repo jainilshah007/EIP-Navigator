@@ -1,15 +1,20 @@
 # EIP Navigator 🧭
 
-A Multi-Agent RAG (Retrieval-Augmented Generation) system for navigating Ethereum Improvement Proposals (ERCs) with built-in security auditing.
+A Multi-Agent RAG (Retrieval-Augmented Generation) system for navigating Ethereum Improvement Proposals (EIPs) with built-in security auditing.
 
 ## ✨ Features
 
-- **500+ ERC Standards** - Automatically fetches and indexes from [ethereum/ERCs](https://github.com/ethereum/ERCs)
-- **Hybrid Search** - Combines Vector Search (BGE) + Keyword Search (BM25) + Direct Injection
+- **500+ EIP Standards** - Automatically fetches and indexes from [ethereum/EIPs](https://github.com/ethereum/EIPs)
+- **Advanced Retrieval Pipeline**:
+  - 🎯 Direct Injection (explicit EIP mentions)
+  - 🔍 Vector Search (BGE embeddings)
+  - 📝 BM25 Keyword Search
+  - 🔄 Cross-Encoder Re-ranking
+- **Section-Based Chunking** - Splits by markdown headers for better context
 - **Multi-Agent Architecture**:
-  - 📚 **Librarian Agent** - Retrieves relevant ERC context
-  - 🔧 **Interface Engineer Agent** - Generates Solidity code
-  - 🛡️ **Security Auditor Agent** - Reviews code for vulnerabilities
+  - 📚 **Librarian Agent** - Retrieves relevant EIP context
+  - 🔧 **Interface Engineer Agent** - Generates answers/code
+  - 🛡️ **Security Auditor Agent** - Reviews responses for accuracy
 - **Self-Correcting Loop** - Auditor finds issues → Engineer fixes → Up to 2 iterations
 - **Live Quality Metrics** - Each response includes precision scoring
 
@@ -56,7 +61,7 @@ cp .env.example .env
 python fetch_docs.py
 ```
 
-This downloads ~500 ERC markdown files from the official Ethereum repository to `./data/`.
+This downloads ~500 EIP markdown files from the official Ethereum repository to `./data/`.
 
 ### 4. Build the Index
 
@@ -68,7 +73,7 @@ This creates:
 - `./chroma_db/` - Vector embeddings (ChromaDB)
 - `./bm25_index.pkl` - Keyword index + Dependency graph
 
-**Note:** First run takes 5-10 minutes for embedding generation.
+**Note:** First run takes 5-10 minutes for embedding generation. Cross-encoder model downloads on first query.
 
 ### 5. Start the Server
 
@@ -224,6 +229,8 @@ Latency: 0.11s
 │         └───────────────┼───────────────────┘               │
 │                         ▼                                    │
 │              Reciprocal Rank Fusion (RRF)                    │
+│                         ▼                                    │
+│              Cross-Encoder Re-ranking                        │
 └─────────────────────────┬───────────────────────────────────┘
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -253,18 +260,16 @@ Latency: 0.11s
 EIP Navigator/
 ├── main.py              # FastAPI orchestrator
 ├── agents.py            # LibrarianAgent, EngineerAgent, AuditorAgent
-├── ingest.py            # Data pipeline (chunking, embedding, indexing)
-├── fetch_docs.py        # Downloads ERCs from GitHub
+├── ingest.py            # Data pipeline (section chunking, embedding, indexing)
+├── fetch_docs.py        # Downloads EIPs from GitHub
 ├── evaluate_metrics.py  # Recall@K evaluation script
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Environment template
 ├── Dockerfile           # Container definition
 ├── docker-compose.yml   # Docker orchestration
 ├── entrypoint.sh        # Docker startup script
-├── project_deep_dive.md # Detailed architecture documentation
-├── version.md           # Change log
-├── notes.debug          # Debug file (required by spec)
-├── data/                # Downloaded ERC markdown files
+├── README.md            # This file
+├── data/                # Downloaded EIP markdown files
 ├── chroma_db/           # Vector database (generated)
 └── bm25_index.pkl       # Keyword index (generated)
 ```
@@ -306,7 +311,8 @@ lsof -t -i:8123 | xargs kill -9
 
 ## 🙏 Acknowledgments
 
-- [Ethereum EIPs/ERCs Repository](https://github.com/ethereum/ERCs)
+- [Ethereum EIPs Repository](https://github.com/ethereum/EIPs)
 - [ChromaDB](https://www.trychroma.com/)
 - [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5)
+- [MS-MARCO MiniLM Cross-Encoder](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2)
 - [OpenAI GPT-4o-mini](https://openai.com/)
