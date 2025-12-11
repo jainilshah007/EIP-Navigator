@@ -1,0 +1,6 @@
+.venv
+chroma_db
+bm25_index.pkl
+data
+.env
+notes.debug

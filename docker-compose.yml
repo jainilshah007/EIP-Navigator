@@ -1,0 +1,12 @@
+
+
+services:
+  eip_navigator:
+    build: .
+    container_name: eip_navigator
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    env_file:
+      - .env
