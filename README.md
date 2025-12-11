@@ -308,6 +308,15 @@ lsof -t -i:8123 | xargs kill -9
 
 ---
 
+## 📚 Additional Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Effort Summary](docs/EFFORT_SUMMARY.md) | What worked, what didn't, and lessons learned |
+| [Proof of Work Log](docs/POW_LOG.md) | AI tool usage and conversation logs |
+
+---
+
 
 ## 🙏 Acknowledgments
 
